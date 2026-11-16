@@ -1,4 +1,4 @@
-name: Diagnose v6 (kiplatform: GTK3, Poppler, Wayland)
+name: Diagnose v6b (kiplatform GTK3 Poppler Wayland)
 
 on:
   push:
