@@ -129,7 +129,8 @@ jobs:
             libprotobuf-dev protobuf-compiler libnng-dev \
             libfreetype-dev libharfbuzz-dev libfontconfig1-dev \
             libzstd-dev libspnav-dev unixodbc-dev \
-            libgtk-3-dev libpoppler-cpp-dev libwayland-dev libpng-dev \
+            libgtk-3-dev libpoppler-cpp-dev libpoppler-glib-dev \
+            libwayland-dev libpng-dev \
             gettext pkg-config
 
       - name: xSignals-Patch anwenden
