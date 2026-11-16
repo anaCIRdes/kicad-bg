@@ -43,7 +43,8 @@ jobs:
           TAGS=$(git ls-remote --tags --refs \
                  https://github.com/KiCad/kicad-source-mirror.git \
                  | awk -F/ '{print $NF}' \
-                 | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V)
+                 | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+                 | grep -vE '^[0-9]+\.99\.[0-9]+$' | sort -V)
           LATEST=$(echo "$TAGS" | tail -1)
           CHOSEN="${{ github.event.inputs.kicad_tag || 'latest' }}"
           [ "$CHOSEN" = "latest" ] && CHOSEN="$LATEST"
@@ -88,7 +89,9 @@ jobs:
     name: Linux-Build (${{ needs.resolve.outputs.tag }})
     needs: [resolve, patch-check]
     if: needs.resolve.outputs.skip == 'false'
-    runs-on: ubuntu-latest
+    # ubuntu-24.04 gepinnt: die apt-Paketliste (wx3.2, OCCT 7.5+) ist
+    # dafuer verifiziert; ubuntu-latest ist inzwischen Ubuntu 26.
+    runs-on: ubuntu-24.04
     timeout-minutes: 350
     steps:
       - name: Dieses Repository auschecken
