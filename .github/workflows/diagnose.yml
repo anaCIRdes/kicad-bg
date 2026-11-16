@@ -1,4 +1,4 @@
-name: Diagnose v5 (unixODBC)
+name: Diagnose v6 (kiplatform: GTK3, Poppler, Wayland)
 
 on:
   push:
@@ -37,7 +37,9 @@ jobs:
             libngspice0-dev nlohmann-json3-dev libgit2-dev libsecret-1-dev \
             libprotobuf-dev protobuf-compiler libnng-dev \
             libfreetype-dev libharfbuzz-dev libfontconfig1-dev \
-            libzstd-dev libspnav-dev unixodbc-dev gettext pkg-config
+            libzstd-dev libspnav-dev unixodbc-dev \
+            libgtk-3-dev libpoppler-cpp-dev libwayland-dev libpng-dev \
+            gettext pkg-config
 
       - name: xSignals-Patch anwenden
         run: python3 scripts/apply_xsignals.py --src kicad
@@ -65,84 +67,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: cmake-log-linux
-          path: /tmp/cmake.log
-          if-no-files-found: ignore
-
-  diag-windows:
-    name: Windows-Diagnose (MSYS2, 10.0.8)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: KiCad-Quelle mit Submodulen
-        uses: actions/checkout@v4
-        with:
-          repository: KiCad/kicad-source-mirror
-          ref: '10.0.8'
-          path: kicad
-          fetch-depth: 1
-          submodules: recursive
-
-      - name: MSYS2 (UCRT64) einrichten
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: UCRT64
-          update: true
-          install: >-
-            git make tar
-            mingw-w64-ucrt-x86_64-cmake
-            mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-toolchain
-            mingw-w64-ucrt-x86_64-boost
-            mingw-w64-ucrt-x86_64-wxwidgets3.2-msw
-            mingw-w64-ucrt-x86_64-glm
-            mingw-w64-ucrt-x86_64-ngspice
-            mingw-w64-ucrt-x86_64-opencascade
-            mingw-w64-ucrt-x86_64-cairo
-            mingw-w64-ucrt-x86_64-pixman
-            mingw-w64-ucrt-x86_64-freetype
-            mingw-w64-ucrt-x86_64-harfbuzz
-            mingw-w64-ucrt-x86_64-fontconfig
-            mingw-w64-ucrt-x86_64-libgit2
-            mingw-w64-ucrt-x86_64-protobuf
-            mingw-w64-ucrt-x86_64-nng
-            mingw-w64-ucrt-x86_64-curl
-            mingw-w64-ucrt-x86_64-zlib
-            mingw-w64-ucrt-x86_64-python
-            mingw-w64-ucrt-x86_64-swig
-            mingw-w64-ucrt-x86_64-gettext
-            mingw-w64-ucrt-x86_64-zstd
-
-      - name: xSignals-Patch anwenden
-        shell: msys2 {0}
-        run: python3 scripts/apply_xsignals.py --src kicad
-
-      - name: 'CMake konfigurieren Windows (wxPython OFF, OCC-Include-Fix)'
-        shell: msys2 {0}
-        run: |
-          set +e
-          cmake -S kicad -B build -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DKICAD_BUILD_QA_TESTS=OFF \
-            -DKICAD_SCRIPTING_WXPYTHON=OFF \
-            -DOCC_INCLUDE_DIR=/ucrt64/include/opencascade \
-            -DCMAKE_INSTALL_PREFIX=$PWD/install > /tmp/cmake.log 2>&1
-          rc=$?
-          if [ $rc -ne 0 ]; then
-            grep -m 15 -E "Could NOT find|CMake Error at|[Ff]atal" /tmp/cmake.log | while IFS= read -r l; do
-              echo "::error::CMake: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
-            done
-            tail -3 /tmp/cmake.log | while IFS= read -r l; do
-              echo "::error::Tail: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
-            done
-            exit 1
-          fi
-          echo "::notice::Windows CMake-Konfiguration ERFOLGREICH"
-
-      - name: Logs als Artefakt
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cmake-log-windows
           path: /tmp/cmake.log
           if-no-files-found: ignore
