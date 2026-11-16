@@ -184,8 +184,12 @@ jobs:
           while read -r lib; do
             cp -Ln "$lib" "$ROOT/lib/" 2>/dev/null || true
           done < /tmp/libs.txt
-          printf '%s
-' '#!/bin/sh' 'HERE="$(cd "$(dirname "$0")" && pwd)"' 'export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' 'exec "$HERE/bin/kicad" "$@"' > "$ROOT/kicad-xsignals"
+          {
+            echo '#!/bin/sh'
+            echo 'HERE="$(cd "$(dirname "$0")" && pwd)"'
+            echo 'export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
+            echo 'exec "$HERE/bin/kicad" "$@"'
+          } > "$ROOT/kicad-xsignals"
           chmod +x "$ROOT/kicad-xsignals"
           tar -C dist -czf "dist/kicad-xsignals-$TAG-linux-x86_64.tar.gz" "kicad-xsignals-$TAG-linux-x86_64"
           ls -lh dist/
