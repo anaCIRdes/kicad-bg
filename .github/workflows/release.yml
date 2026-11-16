@@ -1,0 +1,93 @@
+name: Plugin prüfen und veröffentlichen
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugin/**'
+      - 'pcm/**'
+      - 'README.md'
+      - 'LICENSE'
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Python-Check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # pcbnew gibt es im CI nicht - wir pruefen nur Syntax und
+      # Byte-Compilation der drei Plugin-Dateien.
+      - name: Syntax- und Bytecode-Check
+        run: python -m compileall -q plugin
+
+      - name: Struktur-Check (Pflichtdateien + JSON)
+        shell: python
+        run: |
+          import json, os
+          for p in ["plugin/xsignals_plugin.py",
+                    "plugin/xsignals_core.py",
+                    "plugin/xsignals_dialog.py",
+                    "pcm/metadata.json",
+                    "pcm/pcm.json"]:
+              assert os.path.isfile(p), "Fehlt: " + p
+          json.load(open("pcm/metadata.json", encoding="utf-8"))
+          json.load(open("pcm/pcm.json", encoding="utf-8"))
+          print("Struktur- und JSON-Check OK")
+
+  package:
+    name: Plugin-ZIP + PCM-ZIP bauen
+    needs: test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Plugin-ZIP (fuer manuelle Installation)
+        run: |
+          mkdir -p dist
+          zip -r dist/xsignals-plugin.zip plugin README.md LICENSE
+
+      - name: PCM-ZIP (fuer "Install from file" im PCM)
+        run: |
+          mkdir -p dist/pcm
+          cp plugin/*.py pcm/metadata.json dist/pcm/
+          zip -j dist/xsignals-pcm.zip dist/pcm/*
+
+      - name: SHA256
+        working-directory: dist
+        run: sha256sum *.zip > SHA256SUMS.txt
+
+      - name: Release veröffentlichen
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "xSignals-Plugin ${{ github.ref_name }}"
+          body: |
+            xSignals-Plugin (Altium-Style Längen-Matching für KiCad).
+
+            Installation: PCM -> "Install from file" mit
+            xsignals-pcm.zip, oder die Dateien aus xsignals-plugin.zip
+            nach ~/.local/share/kicad/<version>/scripting/plugins/
+            (Linux) bzw. %APPDATA%\kicad\<version>\scripting\plugins\
+            (Windows) kopieren.
+
+            Zusammen mit dem gepatchten KiCad-Build (Workflow "KiCad
+            bauen (xSignals-Patch)" in diesem Repository) kennt auch
+            der Längen-Tuner die Gruppen.
+          files: |
+            dist/*
+          fail_on_unmatched_files: true

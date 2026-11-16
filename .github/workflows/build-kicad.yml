@@ -1,0 +1,256 @@
+name: KiCad bauen (xSignals-Patch)
+
+on:
+  push:
+    branches: [main]
+    # Build nur starten, wenn sich Patch/Build-Teil geändert hat
+    # (nicht bei reinen Plugin-/Doku-Änderungen)
+    paths-ignore:
+      - 'README.md'
+      - 'ANLEITUNG.md'
+      - 'LICENSE'
+      - 'plugin/**'
+      - 'pcm/**'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+    inputs:
+      kicad_tag:
+        description: 'KiCad-Tag (z. B. 10.0.8) oder "latest" für die neueste stabile Version'
+        required: false
+        default: 'latest'
+  schedule:
+    # Montags 04:10 UTC: prüft automatisch, ob es ein neues KiCad gibt
+    - cron: '10 4 * * 1'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-kicad-xsignals
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: KiCad-Version ermitteln
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      skip: ${{ steps.exist.outputs.skip }}
+    steps:
+      - name: Tag bestimmen (latest = neueste stabile Version)
+        id: tag
+        run: |
+          TAGS=$(git ls-remote --tags --refs \
+                 https://github.com/KiCad/kicad-source-mirror.git \
+                 | awk -F/ '{print $NF}' \
+                 | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V)
+          LATEST=$(echo "$TAGS" | tail -1)
+          CHOSEN="${{ github.event.inputs.kicad_tag || 'latest' }}"
+          [ "$CHOSEN" = "latest" ] && CHOSEN="$LATEST"
+          [ -z "$CHOSEN" ] && { echo "Kein stabiler Tag gefunden"; exit 1; }
+          echo "tag=$CHOSEN" >> "$GITHUB_OUTPUT"
+          echo "Baue KiCad $CHOSEN (neueste stabile Version: $LATEST)"
+
+      - name: Release bereits vorhanden?
+        id: exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "kicad-xsignals-${{ steps.tag.outputs.tag }}" \
+              -R "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Release für ${{ steps.tag.outputs.tag }} existiert bereits - übersprungen."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  patch-check:
+    name: Patch-Anker prüfen (${{ needs.resolve.outputs.tag }})
+    needs: resolve
+    if: needs.resolve.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dieses Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: KiCad-Quelle (ohne Submodule, nur für den Check)
+        uses: actions/checkout@v4
+        with:
+          repository: KiCad/kicad-source-mirror
+          ref: ${{ needs.resolve.outputs.tag }}
+          path: kicad
+          fetch-depth: 1
+
+      - name: Anker-Check (schlägt in Sekunden fehl, wenn KiCad sich geändert hat)
+        run: python3 scripts/apply_xsignals.py --src kicad --check
+
+  build-linux:
+    name: Linux-Build (${{ needs.resolve.outputs.tag }})
+    needs: [resolve, patch-check]
+    if: needs.resolve.outputs.skip == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Dieses Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: KiCad-Quelle mit Submodulen
+        uses: actions/checkout@v4
+        with:
+          repository: KiCad/kicad-source-mirror
+          ref: ${{ needs.resolve.outputs.tag }}
+          path: kicad
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Speicherplatz freimachen (KiCad-Build braucht viel)
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet \
+                       /opt/ghc /usr/local/.ghcup || true
+          df -h /
+
+      - name: Build-Abhängigkeiten installieren
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git curl file \
+            libboost-all-dev libcurl4-openssl-dev libssl-dev \
+            libgl1-mesa-dev libglew-dev libglm-dev libegl1-mesa-dev \
+            libocct-data-exchange-dev libocct-draw-dev \
+            libocct-foundation-dev libocct-modeling-dev \
+            libocct-ocaf-dev libocct-visualization-dev \
+            libcairo2-dev libpixman-1-dev \
+            libwxgtk3.2-dev libwxgtk-gl3.2-gtk3-dev wx3.2-headers \
+            python3-dev swig \
+            libngspice-dev libspice-protocol-dev \
+            nlohmann-json3-dev libgit2-dev libsecret-1-dev \
+            libzstd-dev gettext pkg-config
+
+      - name: xSignals-Patch anwenden
+        run: python3 scripts/apply_xsignals.py --src kicad
+
+      - name: CMake konfigurieren
+        run: >
+          cmake -S kicad -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DKICAD_BUILD_QA_TESTS=OFF
+
+      - name: Kompilieren (dauert 1-2 Stunden)
+        run: cmake --build build -j "$(nproc)"
+
+      - name: Artefakt packen
+        run: |
+          mkdir -p dist
+          tar -C build/bin -czf \
+            dist/kicad-xsignals-${{ needs.resolve.outputs.tag }}-linux-x86_64.tar.gz .
+          ls -lh dist/
+
+      - name: Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ needs.resolve.outputs.tag }}
+          path: dist/
+          retention-days: 90
+
+  build-windows:
+    name: Windows-Build (${{ needs.resolve.outputs.tag }})
+    needs: [resolve, patch-check]
+    if: needs.resolve.outputs.skip == 'false'
+    runs-on: windows-latest
+    timeout-minutes: 350
+    steps:
+      - name: Dieses Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: KiCad-Quelle mit Submodulen
+        uses: actions/checkout@v4
+        with:
+          repository: KiCad/kicad-source-mirror
+          ref: ${{ needs.resolve.outputs.tag }}
+          path: kicad
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: MSYS2 (UCRT64) einrichten
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git make tar
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-wxwidgets3.2-msw
+            mingw-w64-ucrt-x86_64-glm
+            mingw-w64-ucrt-x86_64-ngspice
+            mingw-w64-ucrt-x86_64-opencascade
+            mingw-w64-ucrt-x86_64-cairo
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-swig
+            mingw-w64-ucrt-x86_64-gettext
+            mingw-w64-ucrt-x86_64-zstd
+
+      - name: xSignals-Patch anwenden
+        shell: msys2 {0}
+        run: python3 scripts/apply_xsignals.py --src kicad
+
+      - name: CMake konfigurieren
+        shell: msys2 {0}
+        run: >
+          cmake -S kicad -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DKICAD_BUILD_QA_TESTS=OFF
+          -DCMAKE_INSTALL_PREFIX=$PWD/install
+
+      - name: Kompilieren (dauert 2-4 Stunden)
+        shell: msys2 {0}
+        run: cmake --build build -j "$(nproc)"
+
+      - name: Installieren und packen
+        shell: msys2 {0}
+        run: |
+          cmake --install build
+          7z a -tzip ../kicad-xsignals-${{ needs.resolve.outputs.tag }}-windows-x86_64.zip ./install
+
+      - name: Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ needs.resolve.outputs.tag }}
+          path: kicad-xsignals-${{ needs.resolve.outputs.tag }}-windows-x86_64.zip
+          retention-days: 90
+
+  release:
+    name: Release veröffentlichen
+    needs: [resolve, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Artefakte einsammeln
+        uses: actions/download-artifact@v4
+        with:
+          path: pkg
+          merge-multiple: true
+
+      - name: SHA256-Prüfsummen
+        working-directory: pkg
+        run: sha256sum *.zip *.tar.gz > SHA256SUMS.txt
+
+      - name: GitHub-Release erstellen
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: kicad-xsignals-${{ needs.resolve.outputs.tag }}
+          name: "KiCad ${{ needs.resolve.outputs.tag }} mit xSignals-Tuner"
+          body: |
+            Inoffizieller KiCad-Build mit xSignals-Patch
+            (Tuner kennt xSignal-Gruppen, definiert über das
+            xSignals-Plugin als Board-Property).
+
+            Basis: KiCad ${{ needs.resolve.outputs.tag }}
+            (Quelle: KiCad/kicad-source-mirror)
+
+            Lizenzhinweis: KiCad steht unter GPLv3; dieser Build ist
+            nicht mit dem KiCad-Projekt verbunden.
+          files: |
+            pkg/*
+          fail_on_unmatched_files: true

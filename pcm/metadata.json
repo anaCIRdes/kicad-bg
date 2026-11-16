@@ -1,0 +1,37 @@
+{
+  "$schema": "https://go.kicad.org/pcm/schemas/v1",
+  "name": "xSignals",
+  "description": "xSignal-Gruppen über mehrere Netze definieren (auch durch Serienwiderstände), Längen live messen, Längen- oder Delay-Ziele (ps) mit Toleranz prüfen, Gruppen über Klassen angleichen - Längen-Matching wie in Altium Designer.",
+  "identifier": "com.github.geraldboe86.kicad_xsignals",
+  "version": {
+    "major": 0,
+    "minor": 3,
+    "patch": 0
+  },
+  "author": {
+    "name": "geraldboe86",
+    "contact": {
+      "web": "https://github.com/geraldboe86"
+    }
+  },
+  "maintainer": {
+    "name": "geraldboe86",
+    "contact": {
+      "web": "https://github.com/geraldboe86"
+    }
+  },
+  "license": "MIT",
+  "status": "stable",
+  "tags": [
+    "routing",
+    "length matching",
+    "signal integrity",
+    "xsignal",
+    "high-speed"
+  ],
+  "kicad_version": {
+    "major": 7,
+    "minor": 0
+  },
+  "platforms": ["linux", "windows", "macos"]
+}
