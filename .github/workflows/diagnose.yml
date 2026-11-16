@@ -1,4 +1,4 @@
-name: Diagnose v4 (SPNAV + OCC-Include-Fix)
+name: Diagnose v5 (unixODBC)
 
 on:
   push:
@@ -37,7 +37,7 @@ jobs:
             libngspice0-dev nlohmann-json3-dev libgit2-dev libsecret-1-dev \
             libprotobuf-dev protobuf-compiler libnng-dev \
             libfreetype-dev libharfbuzz-dev libfontconfig1-dev \
-            libzstd-dev libspnav-dev gettext pkg-config
+            libzstd-dev libspnav-dev unixodbc-dev gettext pkg-config
 
       - name: xSignals-Patch anwenden
         run: python3 scripts/apply_xsignals.py --src kicad
