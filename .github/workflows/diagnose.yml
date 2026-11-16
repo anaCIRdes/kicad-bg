@@ -1,4 +1,4 @@
-name: Diagnose v6b (kiplatform GTK3 Poppler Wayland)
+name: Diagnose v7 (Compile-Fehler einsammeln)
 
 on:
   push:
@@ -7,8 +7,9 @@ on:
 
 jobs:
   diag-linux:
-    name: Linux-Diagnose (ubuntu-24.04, 10.0.8)
+    name: Linux-Compile-Diagnose (ubuntu-24.04, 10.0.8)
     runs-on: ubuntu-24.04
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 
@@ -44,28 +45,57 @@ jobs:
       - name: xSignals-Patch anwenden
         run: python3 scripts/apply_xsignals.py --src kicad
 
-      - name: 'CMake konfigurieren Linux'
+      - name: 'CMake konfigurieren'
         run: |
-          set +e
           cmake -S kicad -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DKICAD_BUILD_QA_TESTS=OFF > /tmp/cmake.log 2>&1
+            -DKICAD_BUILD_QA_TESTS=OFF > /tmp/cmake.log 2>&1 || {
+            grep -m 10 -E "Could NOT find|CMake Error" /tmp/cmake.log | while IFS= read -r l; do
+              echo "::error::CMake: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done; exit 1; }
+          echo "::notice::Konfiguration OK"
+
+      - name: 'xSignals-Objekte kompilieren (gezielt)'
+        run: |
+          set +e
+          ninja -C build -j "$(nproc)" \
+            pcbnew/CMakeFiles/pcbnew_kiface_objects.dir/generators/xsignal_manager.cpp.o \
+            pcbnew/CMakeFiles/pcbnew_kiface_objects.dir/generators/pcb_tuning_pattern.cpp.o \
+            > /tmp/obj.log 2>&1
           rc=$?
           if [ $rc -ne 0 ]; then
-            grep -m 15 -E "Could NOT find|CMake Error at|[Ff]atal" /tmp/cmake.log | while IFS= read -r l; do
-              echo "::error::CMake: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            grep -m 12 -E "error:|Error|fatal" /tmp/obj.log | while IFS= read -r l; do
+              echo "::error::OBJ: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
             done
-            tail -3 /tmp/cmake.log | while IFS= read -r l; do
-              echo "::error::Tail: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            tail -3 /tmp/obj.log | while IFS= read -r l; do
+              echo "::error::ObjTail: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
             done
             exit 1
           fi
-          echo "::notice::Linux CMake-Konfiguration ERFOLGREICH"
+          echo "::notice::xSignals-Objekte kompilieren OK"
+
+      - name: 'Vollstaendiger Build (Fehler einsammeln)'
+        run: |
+          set +e
+          ninja -C build -j "$(nproc)" 2>&1 | tee /tmp/build.log > /dev/null
+          rc=${PIPESTATUS[0]}
+          if [ $rc -ne 0 ]; then
+            grep -m 12 -E "error:|Error|fatal error" /tmp/build.log | while IFS= read -r l; do
+              echo "::error::BUILD: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done
+            tail -3 /tmp/build.log | while IFS= read -r l; do
+              echo "::error::BuildTail: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done
+            exit 1
+          fi
+          echo "::notice::VOLLSTAENDIGER BUILD ERFOLGREICH"
 
       - name: Logs als Artefakt
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cmake-log-linux
-          path: /tmp/cmake.log
+          name: compile-logs-linux
+          path: |
+            /tmp/obj.log
+            /tmp/build.log
           if-no-files-found: ignore
