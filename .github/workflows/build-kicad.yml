@@ -18,6 +18,10 @@ on:
         description: 'KiCad-Tag (z. B. 10.0.8) oder "latest" für die neueste stabile Version'
         required: false
         default: 'latest'
+      force_release:
+        description: 'Bestehendes Release überschreiben (Neuaufbau erzwingen)'
+        type: boolean
+        default: false
   schedule:
     # Montags 04:10 UTC: prüft automatisch, ob es ein neues KiCad gibt
     - cron: '10 4 * * 1'
@@ -57,10 +61,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if gh release view "kicad-xsignals-${{ steps.tag.outputs.tag }}" \
+          REL="kicad-xsignals-${{ steps.tag.outputs.tag }}"
+          FORCE="${{ github.event_name == 'push' || github.event.inputs.force_release == 'true' }}"
+          if gh release view "$REL" \
               -R "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Release für ${{ steps.tag.outputs.tag }} existiert bereits - übersprungen."
+            if [ "$FORCE" = "true" ]; then
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+              echo "Release $REL existiert - Force-Rebuild (altes Release wird im Release-Job ersetzt)."
+            else
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "Release für ${{ steps.tag.outputs.tag }} existiert bereits - übersprungen."
+            fi
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
@@ -148,7 +159,6 @@ jobs:
       - name: Artefakt packen
         run: |
           set -euo pipefail
-          mkdir -p dist
           TAG="${{ needs.resolve.outputs.tag }}"
           BIN=""
           [ -d build/bin ] && BIN=build/bin
@@ -163,20 +173,22 @@ jobs:
             done
             exit 1
           fi
-          echo "Bin-Verzeichnis: $BIN"
-          ls -lh "$BIN" | head -12
-          set +e
-          tar -C "$BIN" -czf "dist/kicad-xsignals-$TAG-linux-x86_64.tar.gz" .
-          rc=$?
-          if [ $rc -ne 0 ]; then
-            echo "::error::tar fehlgeschlagen (exit $rc) - Inhalt von $BIN:"
-            ls -lh "$BIN" 2>/dev/null | head -10 | while IFS= read -r l; do
-              echo "::error::$(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
-            done
-            exit $rc
-          fi
+          ROOT="dist/kicad-xsignals-$TAG-linux-x86_64"
+          mkdir -p "$ROOT/bin" "$ROOT/lib"
+          cp -a "$BIN"/. "$ROOT/bin/"
+          find "$ROOT/bin" -type f | while read -r m; do
+            ldd "$m" 2>/dev/null || true
+          done | grep -oE '/(usr/)?lib/x86_64-linux-gnu/[^ ]+\.so[^ ]*' | sort -u \
+            | grep -vE '/(libc\.so|libm\.so|libdl\.so|libpthread\.so|librt\.so|ld-linux|libresolv\.|libnsl\.|libutil\.)' > /tmp/libs.txt
+          echo "Zu bundelnde Bibliotheken: $(wc -l < /tmp/libs.txt)"
+          while read -r lib; do
+            cp -Ln "$lib" "$ROOT/lib/" 2>/dev/null || true
+          done < /tmp/libs.txt
+          printf '%s
+' '#!/bin/sh' 'HERE="$(cd "$(dirname "$0")" && pwd)"' 'export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' 'exec "$HERE/bin/kicad" "$@"' > "$ROOT/kicad-xsignals"
+          chmod +x "$ROOT/kicad-xsignals"
+          tar -C dist -czf "dist/kicad-xsignals-$TAG-linux-x86_64.tar.gz" "kicad-xsignals-$TAG-linux-x86_64"
           ls -lh dist/
-
       - name: Artefakt hochladen
         uses: actions/upload-artifact@v4
         with:
@@ -203,8 +215,9 @@ jobs:
           fetch-depth: 1
           submodules: recursive
 
-      # wxPython fehlt in MSYS2 (kein Paket) -> KICAD_SCRIPTING_WXPYTHON=OFF
-      # Plugin laeuft im offiziellen KiCad; dieser Build stellt den xSignals-Tuner.
+      # Windows: Scripting komplett OFF (kein MSYS2-wxPython, kein Python-Bundle noetig).
+      # Das xSignals-Plugin laeuft im offiziellen KiCad; dieser Build liefert nur
+      # den xSignals-Tuner (reines C++, keine Python-Runtime-Abhaengigkeiten).
       - name: MSYS2 (UCRT64) einrichten
         uses: msys2/setup-msys2@v2
         with:
@@ -245,7 +258,7 @@ jobs:
           cmake -S kicad -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DKICAD_BUILD_QA_TESTS=OFF
-          -DKICAD_SCRIPTING_WXPYTHON=OFF
+          -DKICAD_SCRIPTING=OFF
           -DOCC_INCLUDE_DIR=/ucrt64/include/opencascade
           -DCMAKE_INSTALL_PREFIX=$PWD/install
 
@@ -266,6 +279,25 @@ jobs:
             exit 1
           fi
           tail -3 /tmp/install.log
+
+      - name: Laufzeit-DLLs einsammeln
+        shell: msys2 {0}
+        run: |
+          set -e
+          find install -type f \( -name "*.exe" -o -name "*.dll" -o -name "*.kiface" -o -name "*.so" \) 2>/dev/null | while read -r m; do
+            ldd "$m" 2>/dev/null | grep -oE '/ucrt64/bin/[^ ]+\.dll' || true
+          done | sort -u > /tmp/dlls.txt
+          n=$(wc -l < /tmp/dlls.txt)
+          echo "Gefundene Laufzeit-DLLs: $n"
+          if [ "$n" -eq 0 ]; then
+            echo "::error::Keine Laufzeit-DLLs gefunden (ldd-Problem?)"
+            exit 1
+          fi
+          while read -r dll; do
+            cp -n "$dll" install/bin/ 2>/dev/null || cp -f "$dll" install/bin/
+          done < /tmp/dlls.txt
+          echo "install/bin nach Kopie:"
+          ls install/bin | wc -l
 
       - name: Packen
         shell: pwsh
@@ -298,6 +330,16 @@ jobs:
       - name: SHA256-Prüfsummen
         working-directory: pkg
         run: sha256sum *.zip *.tar.gz > SHA256SUMS.txt
+
+      - name: Altes Release entfernen (falls Force-Rebuild)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REL="kicad-xsignals-${{ needs.resolve.outputs.tag }}"
+          if gh release view "$REL" -R "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release delete "$REL" --cleanup-tag -R "${{ github.repository }}" -y
+            echo "Altes Release $REL entfernt - neues wird erstellt."
+          fi
 
       - name: GitHub-Release erstellen
         uses: softprops/action-gh-release@v2
