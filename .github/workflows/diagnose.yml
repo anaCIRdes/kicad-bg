@@ -51,7 +51,7 @@ jobs:
       - name: xSignals-Patch anwenden
         run: python3 scripts/apply_xsignals.py --src kicad
 
-      - name: CMake konfigurieren
+      - name: 'CMake konfigurieren Linux'
         run: |
           set +e
           cmake -S kicad -B build -G Ninja \
@@ -118,7 +118,7 @@ jobs:
         shell: msys2 {0}
         run: python3 scripts/apply_xsignals.py --src kicad
 
-      - name: CMake konfigurieren (wxPython OFF: kein wxPython in UCRT64)
+      - name: 'CMake konfigurieren Windows (wxPython OFF, nicht in UCRT64 verfuegbar)'
         shell: msys2 {0}
         run: |
           set +e
