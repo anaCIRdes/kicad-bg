@@ -1,4 +1,4 @@
-name: Diagnose (apt + MSYS2-CMake)
+name: Diagnose v2 (apt + komplette CMake-Konfiguration)
 
 on:
   push:
@@ -7,51 +7,70 @@ on:
 
 jobs:
   diag-linux:
-    name: apt-Diagnose (ubuntu-24.04)
+    name: Linux-Diagnose (ubuntu-24.04, 10.0.8)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: apt-get update
-        run: |
-          sudo apt-get update 2>&1 | tee /tmp/aptupdate.log || {
-            echo "::error::apt-get update FEHLGESCHLAGEN"
-            grep -m 8 -E "^E:" /tmp/aptupdate.log | while IFS= read -r l; do
-              echo "::error::$(echo "$l" | cut -c1-180 | tr ',' ';' | tr '%' '#')"
-            done
-            exit 1
-          }
+      - name: KiCad-Quelle mit Submodulen
+        uses: actions/checkout@v4
+        with:
+          repository: KiCad/kicad-source-mirror
+          ref: '10.0.8'
+          path: kicad
+          fetch-depth: 1
+          submodules: recursive
 
-      - name: apt-get install (Liste aus build-kicad.yml)
+      - name: Build-Abhaengigkeiten (korrigierte Liste)
         run: |
           set +e
+          sudo apt-get update 2>&1 | tail -1
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build git curl file \
             libboost-all-dev libcurl4-openssl-dev libssl-dev \
             libgl1-mesa-dev libglew-dev libglm-dev libegl1-mesa-dev \
-            libocct-data-exchange-dev libocct-draw-dev \
-            libocct-foundation-dev libocct-modeling-dev \
+            libocct-data-exchange-dev libocct-draw-dev libocct-foundation-dev \
+            libocct-modeling-algorithms-dev libocct-modeling-data-dev \
             libocct-ocaf-dev libocct-visualization-dev \
             libcairo2-dev libpixman-1-dev \
-            libwxgtk3.2-dev libwxgtk-gl3.2-gtk3-dev wx3.2-headers \
-            python3-dev swig \
-            libngspice-dev libspice-protocol-dev \
-            nlohmann-json3-dev libgit2-dev libsecret-1-dev \
-            libzstd-dev gettext pkg-config 2>&1 | tee /tmp/aptinstall.log
+            libwxgtk3.2-dev libwxgtk-webview3.2-dev wx3.2-headers \
+            python3-dev python3-wxgtk4.0 swig \
+            libngspice0-dev nlohmann-json3-dev libgit2-dev libsecret-1-dev \
+            libprotobuf-dev protobuf-compiler libnng-dev \
+            libfreetype-dev libharfbuzz-dev libfontconfig1-dev \
+            libzstd-dev gettext pkg-config 2>&1 | tee /tmp/apt.log
           rc=${PIPESTATUS[0]}
           if [ $rc -ne 0 ]; then
-            grep -m 6 -E "^E:" /tmp/aptinstall.log | while IFS= read -r l; do
+            grep -m 8 -E "^E:" /tmp/apt.log | while IFS= read -r l; do
               echo "::error::Apt: $(echo "$l" | cut -c1-180 | tr ',' ';' | tr '%' '#')"
-            done
-            tail -4 /tmp/aptinstall.log | while IFS= read -r l; do
-              echo "::error::Tail: $(echo "$l" | cut -c1-180 | tr ',' ';' | tr '%' '#')"
             done
             exit 1
           fi
-          echo "::notice::apt-Liste komplett installierbar auf ubuntu-24.04"
+          echo "::notice::apt-Liste OK auf ubuntu-24.04"
+
+      - name: xSignals-Patch anwenden
+        run: python3 scripts/apply_xsignals.py --src kicad
+
+      - name: CMake konfigurieren
+        run: |
+          set +e
+          cmake -S kicad -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DKICAD_BUILD_QA_TESTS=OFF > /tmp/cmake.log 2>&1
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            grep -m 8 -iE "error|not found|fatal|required" /tmp/cmake.log | while IFS= read -r l; do
+              echo "::error::CMake: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done
+            tail -3 /tmp/cmake.log | while IFS= read -r l; do
+              echo "::error::Tail: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done
+            exit 1
+          fi
+          echo "::notice::Linux CMake-Konfiguration ERFOLGREICH"
 
   diag-windows:
-    name: MSYS2-CMake-Diagnose (10.0.8)
+    name: Windows-Diagnose (MSYS2, 10.0.8)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -65,7 +84,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
 
-      - name: MSYS2 (UCRT64) einrichten
+      - name: MSYS2 (UCRT64) einrichten (erweiterte Liste)
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -81,6 +100,15 @@ jobs:
             mingw-w64-ucrt-x86_64-ngspice
             mingw-w64-ucrt-x86_64-opencascade
             mingw-w64-ucrt-x86_64-cairo
+            mingw-w64-ucrt-x86_64-pixman
+            mingw-w64-ucrt-x86_64-freetype
+            mingw-w64-ucrt-x86_64-harfbuzz
+            mingw-w64-ucrt-x86_64-fontconfig
+            mingw-w64-ucrt-x86_64-libgit2
+            mingw-w64-ucrt-x86_64-protobuf
+            mingw-w64-ucrt-x86_64-nng
+            mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-zlib
             mingw-w64-ucrt-x86_64-python
             mingw-w64-ucrt-x86_64-swig
             mingw-w64-ucrt-x86_64-gettext
@@ -90,31 +118,23 @@ jobs:
         shell: msys2 {0}
         run: python3 scripts/apply_xsignals.py --src kicad
 
-      - name: CMake konfigurieren (Fehler als Annotationen)
+      - name: CMake konfigurieren (wxPython OFF: kein wxPython in UCRT64)
         shell: msys2 {0}
         run: |
           set +e
           cmake -S kicad -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DKICAD_BUILD_QA_TESTS=OFF \
+            -DKICAD_SCRIPTING_WXPYTHON=OFF \
             -DCMAKE_INSTALL_PREFIX=$PWD/install > /tmp/cmake.log 2>&1
           rc=$?
           if [ $rc -ne 0 ]; then
-            grep -m 6 -iE "error|not found|fatal|required" /tmp/cmake.log | while IFS= read -r l; do
+            grep -m 8 -iE "error|not found|fatal|required" /tmp/cmake.log | while IFS= read -r l; do
               echo "::error::CMake: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
             done
-            tail -4 /tmp/cmake.log | while IFS= read -r l; do
+            tail -3 /tmp/cmake.log | while IFS= read -r l; do
               echo "::error::Tail: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
             done
             exit 1
           fi
-          echo "::notice::CMake-Konfiguration erfolgreich"
-
-      - name: Umgebung ausgeben
-        if: always()
-        shell: msys2 {0}
-        run: |
-          echo "::notice::wx-config: $(wx-config --version 2>&1 | head -1 | tr ',' ';')"
-          echo "::notice::python3: $(python3 --version 2>&1 | tr ',' ';')"
-          ls /ucrt64/lib/libngspice* 2>/dev/null | head -2
-          ls /ucrt64/lib/libTKernel* 2>/dev/null | head -1
+          echo "::notice::Windows CMake-Konfiguration ERFOLGREICH"
