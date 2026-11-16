@@ -1,0 +1,102 @@
+name: Diagnose v8 (libpoppler-glib-dev)
+
+on:
+  push:
+    branches: [diagnose]
+  workflow_dispatch:
+
+jobs:
+  diag-linux:
+    name: Linux-Compile-Diagnose (ubuntu-24.04, 10.0.8)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: KiCad-Quelle mit Submodulen
+        uses: actions/checkout@v4
+        with:
+          repository: KiCad/kicad-source-mirror
+          ref: '10.0.8'
+          path: kicad
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Build-Abhaengigkeiten
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git curl file \
+            libboost-all-dev libcurl4-openssl-dev libssl-dev \
+            libgl1-mesa-dev libglew-dev libglm-dev libegl1-mesa-dev \
+            libocct-data-exchange-dev libocct-draw-dev libocct-foundation-dev \
+            libocct-modeling-algorithms-dev libocct-modeling-data-dev \
+            libocct-ocaf-dev libocct-visualization-dev \
+            libcairo2-dev libpixman-1-dev \
+            libwxgtk3.2-dev libwxgtk-webview3.2-dev wx3.2-headers \
+            python3-dev python3-wxgtk4.0 swig \
+            libngspice0-dev nlohmann-json3-dev libgit2-dev libsecret-1-dev \
+            libprotobuf-dev protobuf-compiler libnng-dev \
+            libfreetype-dev libharfbuzz-dev libfontconfig1-dev \
+            libzstd-dev libspnav-dev unixodbc-dev \
+            libgtk-3-dev libpoppler-cpp-dev libpoppler-glib-dev \
+            libwayland-dev libpng-dev \
+            gettext pkg-config
+
+      - name: xSignals-Patch anwenden
+        run: python3 scripts/apply_xsignals.py --src kicad
+
+      - name: 'CMake konfigurieren'
+        run: |
+          cmake -S kicad -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DKICAD_BUILD_QA_TESTS=OFF > /tmp/cmake.log 2>&1 || {
+            grep -m 10 -E "Could NOT find|CMake Error" /tmp/cmake.log | while IFS= read -r l; do
+              echo "::error::CMake: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done; exit 1; }
+          echo "::notice::Konfiguration OK"
+
+      - name: 'xSignals-Objekte kompilieren (gezielt)'
+        run: |
+          set +e
+          ninja -C build -j "$(nproc)" \
+            pcbnew/CMakeFiles/pcbnew_kiface_objects.dir/generators/xsignal_manager.cpp.o \
+            pcbnew/CMakeFiles/pcbnew_kiface_objects.dir/generators/pcb_tuning_pattern.cpp.o \
+            > /tmp/obj.log 2>&1
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            grep -m 12 -E "error:|Error|fatal" /tmp/obj.log | while IFS= read -r l; do
+              echo "::error::OBJ: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done
+            tail -3 /tmp/obj.log | while IFS= read -r l; do
+              echo "::error::ObjTail: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done
+            exit 1
+          fi
+          echo "::notice::xSignals-Objekte kompilieren OK"
+
+      - name: 'Vollstaendiger Build (Fehler einsammeln)'
+        run: |
+          set +e
+          ninja -C build -j "$(nproc)" 2>&1 | tee /tmp/build.log > /dev/null
+          rc=${PIPESTATUS[0]}
+          if [ $rc -ne 0 ]; then
+            grep -m 12 -E "error:|Error|fatal error" /tmp/build.log | while IFS= read -r l; do
+              echo "::error::BUILD: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done
+            tail -3 /tmp/build.log | while IFS= read -r l; do
+              echo "::error::BuildTail: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done
+            exit 1
+          fi
+          echo "::notice::VOLLSTAENDIGER BUILD ERFOLGREICH"
+
+      - name: Logs als Artefakt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-logs-linux
+          path: |
+            /tmp/obj.log
+            /tmp/build.log
+          if-no-files-found: ignore
