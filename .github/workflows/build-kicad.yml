@@ -147,9 +147,34 @@ jobs:
 
       - name: Artefakt packen
         run: |
+          set -euo pipefail
           mkdir -p dist
-          tar -C build/bin -czf \
-            dist/kicad-xsignals-${{ needs.resolve.outputs.tag }}-linux-x86_64.tar.gz .
+          TAG="${{ needs.resolve.outputs.tag }}"
+          BIN=""
+          [ -d build/bin ] && BIN=build/bin
+          if [ -z "$BIN" ]; then
+            KICAD_BIN=$(find build -maxdepth 3 -type f -name kicad -perm -u+x 2>/dev/null | head -1 || true)
+            [ -n "$KICAD_BIN" ] && BIN=$(dirname "$KICAD_BIN")
+          fi
+          if [ -z "$BIN" ]; then
+            echo "::error::Kein KiCad-Bin-Verzeichnis gefunden - build/ Inhalt:"
+            ls -la build 2>/dev/null | head -12 | while IFS= read -r l; do
+              echo "::error::$(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done
+            exit 1
+          fi
+          echo "Bin-Verzeichnis: $BIN"
+          ls -lh "$BIN" | head -12
+          set +e
+          tar -C "$BIN" -czf "dist/kicad-xsignals-$TAG-linux-x86_64.tar.gz" .
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "::error::tar fehlgeschlagen (exit $rc) - Inhalt von $BIN:"
+            ls -lh "$BIN" 2>/dev/null | head -10 | while IFS= read -r l; do
+              echo "::error::$(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done
+            exit $rc
+          fi
           ls -lh dist/
 
       - name: Artefakt hochladen
@@ -228,11 +253,29 @@ jobs:
         shell: msys2 {0}
         run: cmake --build build -j "$(nproc)"
 
-      - name: Installieren und packen
+      - name: Installieren
         shell: msys2 {0}
         run: |
-          cmake --install build
-          7z a -tzip ../kicad-xsignals-${{ needs.resolve.outputs.tag }}-windows-x86_64.zip ./install
+          set +e
+          cmake --install build > /tmp/install.log 2>&1
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            tail -10 /tmp/install.log | while IFS= read -r l; do
+              echo "::error::Install: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done
+            exit 1
+          fi
+          tail -3 /tmp/install.log
+
+      - name: Packen
+        shell: pwsh
+        run: |
+          $tag = "${{ needs.resolve.outputs.tag }}"
+          if (-not (Test-Path "./install")) { Write-Error "install/ fehlt"; exit 1 }
+          Rename-Item -Path "./install" -NewName "kicad-xsignals-$tag-windows-x86_64"
+          7z a -tzip "kicad-xsignals-$tag-windows-x86_64.zip" "./kicad-xsignals-$tag-windows-x86_64"
+          if (-not (Test-Path "kicad-xsignals-$tag-windows-x86_64.zip")) { Write-Error "ZIP fehlt"; exit 1 }
+          Get-Item "kicad-xsignals-$tag-windows-x86_64.zip" | Select-Object Name, Length
 
       - name: Artefakt hochladen
         uses: actions/upload-artifact@v4
