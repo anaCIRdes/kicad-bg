@@ -1,4 +1,4 @@
-name: Diagnose v2 (apt + komplette CMake-Konfiguration)
+name: Diagnose v3 (CMake-Fehler praezise)
 
 on:
   push:
@@ -21,10 +21,9 @@ jobs:
           fetch-depth: 1
           submodules: recursive
 
-      - name: Build-Abhaengigkeiten (korrigierte Liste)
+      - name: Build-Abhaengigkeiten
         run: |
-          set +e
-          sudo apt-get update 2>&1 | tail -1
+          sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             build-essential cmake ninja-build git curl file \
             libboost-all-dev libcurl4-openssl-dev libssl-dev \
@@ -38,15 +37,7 @@ jobs:
             libngspice0-dev nlohmann-json3-dev libgit2-dev libsecret-1-dev \
             libprotobuf-dev protobuf-compiler libnng-dev \
             libfreetype-dev libharfbuzz-dev libfontconfig1-dev \
-            libzstd-dev gettext pkg-config 2>&1 | tee /tmp/apt.log
-          rc=${PIPESTATUS[0]}
-          if [ $rc -ne 0 ]; then
-            grep -m 8 -E "^E:" /tmp/apt.log | while IFS= read -r l; do
-              echo "::error::Apt: $(echo "$l" | cut -c1-180 | tr ',' ';' | tr '%' '#')"
-            done
-            exit 1
-          fi
-          echo "::notice::apt-Liste OK auf ubuntu-24.04"
+            libzstd-dev gettext pkg-config
 
       - name: xSignals-Patch anwenden
         run: python3 scripts/apply_xsignals.py --src kicad
@@ -59,7 +50,7 @@ jobs:
             -DKICAD_BUILD_QA_TESTS=OFF > /tmp/cmake.log 2>&1
           rc=$?
           if [ $rc -ne 0 ]; then
-            grep -m 8 -iE "error|not found|fatal|required" /tmp/cmake.log | while IFS= read -r l; do
+            grep -m 8 -E "Could NOT find|CMake Error at|[Ff]atal" /tmp/cmake.log | while IFS= read -r l; do
               echo "::error::CMake: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
             done
             tail -3 /tmp/cmake.log | while IFS= read -r l; do
@@ -68,6 +59,14 @@ jobs:
             exit 1
           fi
           echo "::notice::Linux CMake-Konfiguration ERFOLGREICH"
+
+      - name: Logs als Artefakt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmake-log-linux
+          path: /tmp/cmake.log
+          if-no-files-found: ignore
 
   diag-windows:
     name: Windows-Diagnose (MSYS2, 10.0.8)
@@ -84,7 +83,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
 
-      - name: MSYS2 (UCRT64) einrichten (erweiterte Liste)
+      - name: MSYS2 (UCRT64) einrichten
         uses: msys2/setup-msys2@v2
         with:
           msystem: UCRT64
@@ -118,7 +117,7 @@ jobs:
         shell: msys2 {0}
         run: python3 scripts/apply_xsignals.py --src kicad
 
-      - name: 'CMake konfigurieren Windows (wxPython OFF, nicht in UCRT64 verfuegbar)'
+      - name: 'CMake konfigurieren Windows (wxPython OFF)'
         shell: msys2 {0}
         run: |
           set +e
@@ -129,7 +128,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=$PWD/install > /tmp/cmake.log 2>&1
           rc=$?
           if [ $rc -ne 0 ]; then
-            grep -m 8 -iE "error|not found|fatal|required" /tmp/cmake.log | while IFS= read -r l; do
+            grep -m 8 -E "Could NOT find|CMake Error at|[Ff]atal" /tmp/cmake.log | while IFS= read -r l; do
               echo "::error::CMake: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
             done
             tail -3 /tmp/cmake.log | while IFS= read -r l; do
@@ -138,3 +137,11 @@ jobs:
             exit 1
           fi
           echo "::notice::Windows CMake-Konfiguration ERFOLGREICH"
+
+      - name: Logs als Artefakt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmake-log-windows
+          path: /tmp/cmake.log
+          if-no-files-found: ignore
