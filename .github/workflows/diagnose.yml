@@ -1,4 +1,4 @@
-name: Diagnose v3 (CMake-Fehler praezise)
+name: Diagnose v4 (SPNAV + OCC-Include-Fix)
 
 on:
   push:
@@ -37,7 +37,7 @@ jobs:
             libngspice0-dev nlohmann-json3-dev libgit2-dev libsecret-1-dev \
             libprotobuf-dev protobuf-compiler libnng-dev \
             libfreetype-dev libharfbuzz-dev libfontconfig1-dev \
-            libzstd-dev gettext pkg-config
+            libzstd-dev libspnav-dev gettext pkg-config
 
       - name: xSignals-Patch anwenden
         run: python3 scripts/apply_xsignals.py --src kicad
@@ -50,7 +50,7 @@ jobs:
             -DKICAD_BUILD_QA_TESTS=OFF > /tmp/cmake.log 2>&1
           rc=$?
           if [ $rc -ne 0 ]; then
-            grep -m 8 -E "Could NOT find|CMake Error at|[Ff]atal" /tmp/cmake.log | while IFS= read -r l; do
+            grep -m 15 -E "Could NOT find|CMake Error at|[Ff]atal" /tmp/cmake.log | while IFS= read -r l; do
               echo "::error::CMake: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
             done
             tail -3 /tmp/cmake.log | while IFS= read -r l; do
@@ -117,7 +117,7 @@ jobs:
         shell: msys2 {0}
         run: python3 scripts/apply_xsignals.py --src kicad
 
-      - name: 'CMake konfigurieren Windows (wxPython OFF)'
+      - name: 'CMake konfigurieren Windows (wxPython OFF, OCC-Include-Fix)'
         shell: msys2 {0}
         run: |
           set +e
@@ -125,10 +125,11 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DKICAD_BUILD_QA_TESTS=OFF \
             -DKICAD_SCRIPTING_WXPYTHON=OFF \
+            -DOCC_INCLUDE_DIR=/ucrt64/include/opencascade \
             -DCMAKE_INSTALL_PREFIX=$PWD/install > /tmp/cmake.log 2>&1
           rc=$?
           if [ $rc -ne 0 ]; then
-            grep -m 8 -E "Could NOT find|CMake Error at|[Ff]atal" /tmp/cmake.log | while IFS= read -r l; do
+            grep -m 15 -E "Could NOT find|CMake Error at|[Ff]atal" /tmp/cmake.log | while IFS= read -r l; do
               echo "::error::CMake: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
             done
             tail -3 /tmp/cmake.log | while IFS= read -r l; do
