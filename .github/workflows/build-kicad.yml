@@ -152,9 +152,27 @@ jobs:
           cmake -S kicad -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DKICAD_BUILD_QA_TESTS=OFF
+          -DCMAKE_INSTALL_PREFIX=$PWD/install
+          -DPYTHON_SITE_PACKAGE_PATH=$PWD/install/lib/python3/dist-packages
 
       - name: Kompilieren (dauert 1-2 Stunden)
         run: cmake --build build -j "$(nproc)"
+
+      # KiCad 10 bettet Python immer ein: die KiCad-Python-Module (pcbnew.py,
+      # _pcbnew.so usw.) muessen mit ins Paket, sonst fehlen sie der eingebetteten
+      # Python-Runtime auf dem Zielsystem.
+      - name: Installieren (Python-Module einsammeln)
+        run: |
+          set +e
+          cmake --install build > /tmp/install.log 2>&1
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            tail -10 /tmp/install.log | while IFS= read -r l; do
+              echo "::error::Install: $(echo "$l" | cut -c1-170 | tr ',' ';' | tr '%' '#')"
+            done
+            exit 1
+          fi
+          tail -3 /tmp/install.log
 
       - name: Artefakt packen
         run: |
@@ -174,9 +192,25 @@ jobs:
             exit 1
           fi
           ROOT="dist/kicad-xsignals-$TAG-linux-x86_64"
+          PYVER=$(python3 -c 'import sys; print("python{}.{}".format(*sys.version_info[:2]))')
           mkdir -p "$ROOT/bin" "$ROOT/lib"
           cp -a "$BIN"/. "$ROOT/bin/"
-          find "$ROOT/bin" -type f | while read -r m; do
+          # Python-Runtime bündeln: Standardbibliothek + KiCad-Python-Module (aus install/).
+          # KiCad 10 bettet Python immer ein; ohne Stdlib bricht der Start mit
+          # "Failed to import encodings module" ab.
+          cp -a "/usr/lib/$PYVER" "$ROOT/lib/"
+          rm -rf "$ROOT/lib/$PYVER/test" "$ROOT/lib/$PYVER/turtledemo" \
+                 "$ROOT/lib/$PYVER/idlelib" "$ROOT/lib/$PYVER/tkinter"
+          find "$ROOT/lib/$PYVER" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+          if [ -d "install/lib/python3/dist-packages" ]; then
+            mkdir -p "$ROOT/lib/$PYVER/site-packages"
+            cp -a install/lib/python3/dist-packages/. "$ROOT/lib/$PYVER/site-packages/"
+          else
+            echo "::error::install/lib/python3/dist-packages fehlt (Install-Step gescheitert?)"
+            exit 1
+          fi
+          echo "Python-Runtime: $PYVER, $(find "$ROOT/lib/$PYVER" -name '*.py' | wc -l) .py-Dateien"
+          { find "$ROOT/bin" -type f; find "$ROOT/lib/$PYVER" -type f -name "*.so"; } | while read -r m; do
             ldd "$m" 2>/dev/null || true
           done | grep -oE '/(usr/)?lib/x86_64-linux-gnu/[^ ]+\.so[^ ]*' | sort -u \
             | grep -vE '/(libc\.so|libm\.so|libdl\.so|libpthread\.so|librt\.so|ld-linux|libresolv\.|libnsl\.|libutil\.)' > /tmp/libs.txt
@@ -188,6 +222,8 @@ jobs:
             echo '#!/bin/sh'
             echo 'HERE="$(cd "$(dirname "$0")" && pwd)"'
             echo 'export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"'
+            echo "export PYTHONHOME=\"\$HERE\""
+            echo "export PYTHONPATH=\"\$HERE/lib/$PYVER/site-packages:/usr/lib/python3/dist-packages\${PYTHONPATH:+:\$PYTHONPATH}\""
             echo 'exec "$HERE/bin/kicad" "$@"'
           } > "$ROOT/kicad-xsignals"
           chmod +x "$ROOT/kicad-xsignals"
@@ -219,9 +255,11 @@ jobs:
           fetch-depth: 1
           submodules: recursive
 
-      # Windows: Scripting komplett OFF (kein MSYS2-wxPython, kein Python-Bundle noetig).
-      # Das xSignals-Plugin laeuft im offiziellen KiCad; dieser Build liefert nur
-      # den xSignals-Tuner (reines C++, keine Python-Runtime-Abhaengigkeiten).
+      # Windows: KiCad 10 bettet Python IMMER ein (die CMake-Option KICAD_SCRIPTING
+      # existiert nicht mehr; python_scripting.cpp ist fest in kicommon verlinkt).
+      # Deshalb: wxPython OFF (kein MSYS2-wxPython fuer Python 3.14) und die
+      # komplette Python-Runtime (DLLs + Standardbibliothek) wird unten mit ins ZIP gepackt.
+      # Das xSignals-Plugin selbst laeuft im offiziellen KiCad.
       - name: MSYS2 (UCRT64) einrichten
         uses: msys2/setup-msys2@v2
         with:
@@ -262,7 +300,6 @@ jobs:
           cmake -S kicad -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DKICAD_BUILD_QA_TESTS=OFF
-          -DKICAD_SCRIPTING=OFF
           -DKICAD_SCRIPTING_WXPYTHON=OFF
           -DOCC_INCLUDE_DIR=/ucrt64/include/opencascade
           -DCMAKE_INSTALL_PREFIX=$PWD/install
@@ -285,17 +322,37 @@ jobs:
           fi
           tail -3 /tmp/install.log
 
-      - name: Laufzeit-DLLs einsammeln
+      - name: Laufzeit-DLLs & Python-Runtime einsammeln
         shell: msys2 {0}
         run: |
           set -e
-          find install -type f \( -name "*.exe" -o -name "*.dll" -o -name "*.kiface" -o -name "*.so" \) 2>/dev/null | while read -r m; do
+          # KiCad 10 bettet Python immer ein: Standardbibliothek mit ins Paket legen,
+          # sonst bricht kicad.exe mit "Failed to import encodings module" ab.
+          # Der Kopie liegt die komplette /ucrt64/lib/python3.x bei - inklusive der
+          # site-packages, in die cmake --install die KiCad-Python-Module geschrieben hat.
+          pydir=$(ls -d /ucrt64/lib/python3.* | head -1)
+          pyver=$(basename "$pydir")
+          mkdir -p install/lib
+          cp -a "$pydir" install/lib/
+          rm -rf install/lib/"$pyver"/test install/lib/"$pyver"/turtledemo \
+                 install/lib/"$pyver"/idlelib install/lib/"$pyver"/tkinter
+          find install/lib/"$pyver" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+          echo "Python-Runtime: $pyver, $(find install/lib/$pyver -name '*.py' | wc -l) .py-Dateien"
+          # Interpreter-EXEs dazulegen (KiCad sucht python.exe im eigenen bin/)
+          cp /ucrt64/bin/python3.exe install/bin/ 2>/dev/null || true
+          cp /ucrt64/bin/python.exe install/bin/ 2>/dev/null || true
+          # Alle Laufzeit-DLLs via ldd einsammeln (inkl. .pyd-Abhaengigkeiten)
+          find install -type f \( -name "*.exe" -o -name "*.dll" -o -name "*.kiface" -o -name "*.so" -o -name "*.pyd" \) 2>/dev/null | while read -r m; do
             ldd "$m" 2>/dev/null | grep -oE '/ucrt64/bin/[^ ]+\.dll' || true
           done | sort -u > /tmp/dlls.txt
           n=$(wc -l < /tmp/dlls.txt)
           echo "Gefundene Laufzeit-DLLs: $n"
           if [ "$n" -eq 0 ]; then
             echo "::error::Keine Laufzeit-DLLs gefunden (ldd-Problem?)"
+            exit 1
+          fi
+          if ! find install/bin -maxdepth 1 -name "*python*" -name "*.dll" | grep -q .; then
+            echo "::error::Keine python-DLL nach ldd-Scan in install/bin gefunden"
             exit 1
           fi
           while read -r dll; do
