@@ -21,7 +21,7 @@ kicad-bg/
 1. **Plugin benutzen (sofort, ohne Build)**:
    - Die drei `.py` aus `plugin/` in den KiCad-Skript-Ordner kopieren:
      - Linux: `~/.local/share/kicad/<version>/scripting/plugins/`
-     - Windows: `%APPDATA%\kicad\<version>\scripting\plugins\`
+     - Windows: `C:\Users\<Name>\Documents\KiCad\<version>\scripting\plugins\`
    - pcbnew starten: "Werkzeuge > Externe Plugins" > xSignals.
    - Gruppe anlegen: Netze auswählen oder "Kette ableiten..." (findet
      Serienwiderstände automatisch), Ziel mm/ps + Toleranz + Klasse

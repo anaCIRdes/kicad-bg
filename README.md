@@ -17,7 +17,7 @@
 Die drei `.py` aus `plugin/` nach
 
 - Linux: `~/.local/share/kicad/<version>/scripting/plugins/`
-- Windows: `%APPDATA%\kicad\<version>\scripting\plugins\`
+- Windows: `C:\Users\<Name>\Documents\KiCad\<version>\scripting\plugins\`
 
 kopieren, pcbnew starten, "Werkzeuge > Externe Plugins" > xSignals.
 Oder das PCM-ZIP aus einem Release über "Install from file" installieren.
