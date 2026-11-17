@@ -30,7 +30,8 @@ class XSignalsPlugin(pcbnew.ActionPlugin):
         self.description = (
             "xSignal-Gruppen über mehrere Netze definieren, geroutete "
             "Längen (Tracks/Arcs/Vias) live messen und gegen Zielwert + "
-            "Toleranz prüfen.")
+            "Toleranz prüfen. Mäander-Tuning: Länge exakt auf Ziel "
+            "tunen - direkt im offiziellen KiCad, ohne gepatchten Build.")
         self.show_toolbar_button = True
 
     def Run(self):

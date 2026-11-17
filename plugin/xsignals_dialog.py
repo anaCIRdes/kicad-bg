@@ -206,6 +206,7 @@ class XSignalsDialog(wx.Dialog):
                 ("Kette ableiten...", self.on_chain),
                 ("Netze...", self.on_nets),
                 ("Ziele...", self.on_target),
+                ("Tunen...", self.on_tune),
                 ("Löschen", self.on_delete),
                 ("Gruppen angleichen", self.on_align),
                 ("CSV-Export...", self.on_csv)):
@@ -345,6 +346,31 @@ class XSignalsDialog(wx.Dialog):
             self.refresh()
         else:
             dlg.Destroy()
+
+    def on_tune(self, event):
+        """Mäander-Tuning: Länge exakt auf Ziel im offiziellen KiCad."""
+        xs = self._selected()
+        if not xs:
+            self._info_select()
+            return
+        if not xs.nets:
+            self._info("Gruppe '%s' hat keine Netze." % xs.name)
+            return
+        try:
+            import xsignals_tune as tune_mod
+        except Exception as exc:
+            wx.MessageBox("Tuning-Modul konnte nicht geladen werden:\n"
+                           "%s" % exc, "xSignals", wx.ICON_ERROR)
+            return
+        self.timer.Stop()
+        try:
+            dlg = tune_mod.TuneDialog(self, self.board, xs, self.netmap,
+                                      self.store.via_mm)
+            dlg.ShowModal()
+            dlg.Destroy()
+        finally:
+            self.timer.Start(LIVE_TIMER_MS)
+        self._measure()
 
     def on_delete(self, event):
         xs = self._selected()
